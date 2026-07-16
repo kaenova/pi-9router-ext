@@ -123,6 +123,18 @@ const CUSTOM_TYPE_LAST_ROUTE = "9router-last-route";
 const FALLBACK_CONTEXT_WINDOW = 128000;
 const FALLBACK_MAX_TOKENS = 4096;
 
+// Some models advertise a large context window but hard-limit completion tokens
+// to a lower value. MiMo (Xiaomi) models, for example, advertise ~1M context
+// while capping completions at 131072. Without a clamp, the metadata fallback
+// may resolve a higher maxTokens, causing the client to send max_tokens above
+// the upstream cap and receive a 400 rejection.
+const MIMO_MAX_COMPLETION_TOKENS = 131072;
+
+function isMimoModel(model: NineRouterModel): boolean {
+	const id = (model.id || "").toLowerCase();
+	return id.includes("mimo");
+}
+
 // Headers that may indicate the actual upstream model used
 const ROUTING_HEADERS = [
 	"x-9router-model",
@@ -782,13 +794,15 @@ function modelContextWindowInfo(model: NineRouterModel, metadata?: ModelMetadata
 }
 
 function modelMaxTokensInfo(model: NineRouterModel, metadata: ModelMetadata | undefined, contextWindow: number): LimitInfo {
+	const modelMaxCap = isMimoModel(model) ? MIMO_MAX_COMPLETION_TOKENS : Infinity;
+
 	const routerValue = firstTokenCount(model, ROUTER_OUTPUT_PATHS);
-	if (routerValue !== undefined) return { value: Math.min(routerValue, contextWindow), source: "router" };
+	if (routerValue !== undefined) return { value: Math.min(routerValue, contextWindow, modelMaxCap), source: "router" };
 
 	const metadataValue = metadata ? firstTokenCount(metadata, METADATA_OUTPUT_PATHS) : undefined;
-	if (metadataValue !== undefined) return { value: Math.min(metadataValue, contextWindow), source: "metadata" };
+	if (metadataValue !== undefined) return { value: Math.min(metadataValue, contextWindow, modelMaxCap), source: "metadata" };
 
-	return { value: Math.min(FALLBACK_MAX_TOKENS, contextWindow), source: "fallback" };
+	return { value: Math.min(FALLBACK_MAX_TOKENS, contextWindow, modelMaxCap), source: "fallback" };
 }
 
 function modelContextWindow(model: NineRouterModel, metadata?: ModelMetadata): number {
