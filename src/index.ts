@@ -16,8 +16,8 @@
  *   NINE_ROUTER_ENABLE_REASONING - expose Pi thinking levels and send reasoning_effort
  */
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -129,10 +129,27 @@ const FALLBACK_MAX_TOKENS = 4096;
 // may resolve a higher maxTokens, causing the client to send max_tokens above
 // the upstream cap and receive a 400 rejection.
 const MIMO_MAX_COMPLETION_TOKENS = 131072;
+// Command Code validates max_tokens at the gateway and currently rejects
+// values above 200000, even when /v1/models advertises a larger model-native
+// completion limit (for example, 384000 for DeepSeek V4 and 262144 for Kimi).
+const COMMAND_CODE_MAX_COMPLETION_TOKENS = 200000;
 
 function isMimoModel(model: NineRouterModel): boolean {
 	const id = (model.id || "").toLowerCase();
 	return id.includes("mimo");
+}
+
+function isCommandCodeModel(model: NineRouterModel): boolean {
+	const id = (model.id || "").toLowerCase();
+	const owner = (model.owned_by || "").toLowerCase();
+	return id.startsWith("cmc/") || owner === "cmc";
+}
+
+function modelCompletionTokenCap(model: NineRouterModel): number {
+	let cap = Infinity;
+	if (isMimoModel(model)) cap = Math.min(cap, MIMO_MAX_COMPLETION_TOKENS);
+	if (isCommandCodeModel(model)) cap = Math.min(cap, COMMAND_CODE_MAX_COMPLETION_TOKENS);
+	return cap;
 }
 
 // Headers that may indicate the actual upstream model used
@@ -150,6 +167,17 @@ const ROUTING_HEADERS = [
 
 function normalizeBaseUrl(url: string): string {
 	return url.replace(/\/$/, "");
+}
+
+function writeFileAtomic(path: string, contents: string) {
+	mkdirSync(dirname(path), { recursive: true });
+	const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(temporaryPath, contents, { mode: 0o600 });
+		renameSync(temporaryPath, path);
+	} finally {
+		if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+	}
 }
 
 function maskApiKey(key: string): string {
@@ -201,8 +229,7 @@ function loadConfigFromDisk(): NineRouterConfig | null {
 
 function saveConfigToDisk(config: NineRouterConfig) {
 	try {
-		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-		writeFileSync(
+		writeFileAtomic(
 			CONFIG_PATH,
 			`${JSON.stringify({
 				baseUrl: config.baseUrl,
@@ -211,7 +238,6 @@ function saveConfigToDisk(config: NineRouterConfig) {
 				webSearchRoute: config.webSearchRoute,
 				webFetchRoute: config.webFetchRoute,
 			}, null, 2)}\n`,
-			{ mode: 0o600 },
 		);
 	} catch (err) {
 		console.error("[pi-9router-ext] Failed to persist config:", err);
@@ -318,8 +344,7 @@ function writeDiscoveryCache(
 	if (models.length === 0) return;
 	try {
 		const existing = readDiscoveryCache(config);
-		mkdirSync(dirname(DISCOVERY_CACHE_PATH), { recursive: true });
-		writeFileSync(
+		writeFileAtomic(
 			DISCOVERY_CACHE_PATH,
 			`${JSON.stringify({
 				baseUrl: config.baseUrl,
@@ -328,7 +353,6 @@ function writeDiscoveryCache(
 				models,
 				webRoutes: webRoutes ?? existing?.webRoutes,
 			}, null, 2)}\n`,
-			{ mode: 0o600 },
 		);
 	} catch (err) {
 		console.warn(`[pi-9router-ext] Failed to persist discovery cache: ${errorMessage(err)}`);
@@ -453,8 +477,7 @@ function readMetadataCache(): { ts: number; data: unknown } | undefined {
 
 function writeMetadataCache(data: unknown) {
 	try {
-		mkdirSync(dirname(MODEL_METADATA_CACHE_PATH), { recursive: true });
-		writeFileSync(MODEL_METADATA_CACHE_PATH, JSON.stringify({ ts: Date.now(), data }), { mode: 0o600 });
+		writeFileAtomic(MODEL_METADATA_CACHE_PATH, JSON.stringify({ ts: Date.now(), data }));
 	} catch (err) {
 		console.error("[pi-9router-ext] Failed to persist model metadata cache:", err);
 	}
@@ -794,7 +817,7 @@ function modelContextWindowInfo(model: NineRouterModel, metadata?: ModelMetadata
 }
 
 function modelMaxTokensInfo(model: NineRouterModel, metadata: ModelMetadata | undefined, contextWindow: number): LimitInfo {
-	const modelMaxCap = isMimoModel(model) ? MIMO_MAX_COMPLETION_TOKENS : Infinity;
+	const modelMaxCap = modelCompletionTokenCap(model);
 
 	const routerValue = firstTokenCount(model, ROUTER_OUTPUT_PATHS);
 	if (routerValue !== undefined) return { value: Math.min(routerValue, contextWindow, modelMaxCap), source: "router" };
