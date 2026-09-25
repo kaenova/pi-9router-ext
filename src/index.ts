@@ -39,6 +39,7 @@ interface NineRouterConfig {
 	baseUrl: string;
 	apiKey: string | undefined;
 	enableReasoning: boolean;
+	enableWebTools: boolean;
 	webSearchRoute: string | undefined;
 	webFetchRoute: string | undefined;
 }
@@ -120,6 +121,7 @@ const STARTUP_DISCOVERY_TIMEOUT_MS = 5_000;
 
 const CUSTOM_TYPE_CONFIG = "9router-config";
 const CUSTOM_TYPE_LAST_ROUTE = "9router-last-route";
+const WEB_TOOL_NAMES = ["ninerouter_web_search", "ninerouter_web_fetch"] as const;
 const FALLBACK_CONTEXT_WINDOW = 128000;
 const FALLBACK_MAX_TOKENS = 4096;
 
@@ -198,6 +200,7 @@ function applyEnvOverrides(config: NineRouterConfig): NineRouterConfig {
 		baseUrl: normalizeBaseUrl(ENV_BASE_URL || config.baseUrl),
 		apiKey: ENV_API_KEY || config.apiKey,
 		enableReasoning: parseBooleanFlag(ENV_ENABLE_REASONING) ?? config.enableReasoning,
+		enableWebTools: config.enableWebTools,
 		webSearchRoute: config.webSearchRoute,
 		webFetchRoute: config.webFetchRoute,
 	};
@@ -214,6 +217,7 @@ function loadConfigFromDisk(): NineRouterConfig | null {
 				? data.apiKey.trim()
 				: undefined,
 			enableReasoning: data.enableReasoning === true,
+			enableWebTools: data.enableWebTools !== false,
 			webSearchRoute: typeof data.webSearchRoute === "string" && data.webSearchRoute.trim()
 				? data.webSearchRoute.trim()
 				: undefined,
@@ -235,6 +239,7 @@ function saveConfigToDisk(config: NineRouterConfig) {
 				baseUrl: config.baseUrl,
 				apiKey: config.apiKey,
 				enableReasoning: config.enableReasoning,
+				enableWebTools: config.enableWebTools,
 				webSearchRoute: config.webSearchRoute,
 				webFetchRoute: config.webFetchRoute,
 			}, null, 2)}\n`,
@@ -249,6 +254,7 @@ function getInitialConfig(): NineRouterConfig {
 		baseUrl: DEFAULT_BASE_URL,
 		apiKey: undefined,
 		enableReasoning: false,
+		enableWebTools: true,
 		webSearchRoute: undefined,
 		webFetchRoute: undefined,
 	});
@@ -265,6 +271,7 @@ function loadConfigFromSession(ctx: ExtensionContext): NineRouterConfig | null {
 					baseUrl: normalizeBaseUrl(data.baseUrl),
 					apiKey: data.apiKey,
 					enableReasoning: data.enableReasoning === true,
+					enableWebTools: data.enableWebTools !== false,
 					webSearchRoute: typeof data.webSearchRoute === "string" ? data.webSearchRoute : undefined,
 					webFetchRoute: typeof data.webFetchRoute === "string" ? data.webFetchRoute : undefined,
 				});
@@ -280,9 +287,19 @@ function persistConfig(pi: ExtensionAPI, config: NineRouterConfig) {
 		baseUrl: config.baseUrl,
 		apiKey: config.apiKey,
 		enableReasoning: config.enableReasoning,
+		enableWebTools: config.enableWebTools,
 		webSearchRoute: config.webSearchRoute,
 		webFetchRoute: config.webFetchRoute,
 	});
+}
+
+function applyWebToolState(pi: ExtensionAPI, enabled: boolean) {
+	const active = new Set(pi.getActiveTools());
+	for (const name of WEB_TOOL_NAMES) {
+		if (enabled) active.add(name);
+		else active.delete(name);
+	}
+	pi.setActiveTools([...active]);
 }
 
 function isCachedModel(value: unknown): value is NineRouterModel {
@@ -875,6 +892,7 @@ function mapNineRouterModel(model: NineRouterModel, enableReasoning: boolean, me
 				medium: "medium",
 				high: "high",
 				xhigh: "xhigh",
+				max: "max",
 			},
 		} : {}),
 		input: modelInputTypes(metadata),
@@ -1141,6 +1159,8 @@ export default async function (pi: ExtensionAPI) {
 			startBackgroundDiscovery("migrated config");
 		}
 
+		applyWebToolState(pi, config.enableWebTools);
+
 		if (isConnected && discoveredModels.length > 0) {
 			ctx.ui.notify(
 				`9router connected — ${discoveredModels.length} models, ${routesByKind(discoveredWebRoutes, "webSearch").length} search routes, ${routesByKind(discoveredWebRoutes, "webFetch").length} fetch routes available`,
@@ -1154,6 +1174,10 @@ export default async function (pi: ExtensionAPI) {
 				discoveryStatus === "not_configured" ? "warning" : "info",
 			);
 		}
+	});
+
+	pi.on("session_tree", async () => {
+		applyWebToolState(pi, config.enableWebTools);
 	});
 
 	// ---------------------------------------------------------------------------
@@ -1275,6 +1299,7 @@ export default async function (pi: ExtensionAPI) {
 						"Connection",
 						"Reasoning",
 						"Web defaults",
+						"Web tools",
 						"View status/routes",
 						"Done",
 					],
@@ -1392,6 +1417,18 @@ export default async function (pi: ExtensionAPI) {
 
 					persistConfig(pi, config);
 					ctx.ui.notify(webRoutesSummary(discoveredWebRoutes, config).join("\n"), "info");
+				}
+
+				if (choice === "Web tools") {
+					const webChoice = await ctx.ui.select(
+						`9router web tools are currently ${config.enableWebTools ? "enabled" : "disabled"}. When disabled, ninerouter_web_search and ninerouter_web_fetch are hidden from the model.`,
+						["Enable web tools", "Disable web tools"],
+					);
+					if (!webChoice) continue;
+					config = { ...config, enableWebTools: webChoice === "Enable web tools" };
+					persistConfig(pi, config);
+					applyWebToolState(pi, config.enableWebTools);
+					ctx.ui.notify(`9router web tools ${config.enableWebTools ? "enabled" : "disabled"}`, "info");
 				}
 
 				if (choice === "View status/routes") {

@@ -77,7 +77,7 @@ NINE_ROUTER_BASE_URL=http://my-vps:20128 NINE_ROUTER_API_KEY=nr-... pi
 
 ### Interactive Configuration
 
-Use the `/9router-config` command inside Pi to open a configuration menu for connection settings, reasoning, web defaults, and status/routes. This is saved to `~/.pi/agent/9router-config.json` and is shared by new Pi instances. Environment variables still take precedence when set.
+Use the `/9router-config` command inside Pi to open a configuration menu for connection settings, reasoning, web defaults, web tools, and status/routes. This is saved to `~/.pi/agent/9router-config.json` and is shared by new Pi instances. Environment variables still take precedence when set.
 
 ```
 /9router-config
@@ -119,7 +119,7 @@ If your selected 9router route/model supports reasoning, enable the manual toggl
 /9router-reasoning
 ```
 
-When enabled, Pi treats 9router models as reasoning-capable. Use Pi's normal thinking controls such as Shift+Tab, `--thinking high`, or model suffixes like `9router/cx/gpt-5.3-codex:high`. Pi sends OpenAI-style `reasoning_effort` values to 9router (`off → none`, `low`, `medium`, `high`, `xhigh`).
+When enabled, Pi treats 9router models as reasoning-capable. Use Pi's normal thinking controls such as Shift+Tab, `--thinking high`, or model suffixes like `9router/cx/gpt-5.3-codex:high`. Pi sends OpenAI-style `reasoning_effort` values to 9router (`off → none`, `low`, `medium`, `high`, `xhigh`, `max`).
 
 ### Web Search / Fetch Tools
 
@@ -128,7 +128,7 @@ If 9router exposes web routes from `GET /v1/models/web`, this extension lets the
 - `ninerouter_web_search` — calls `POST /v1/search`
 - `ninerouter_web_fetch` — calls `POST /v1/web/fetch`
 
-Tools are always registered. If no matching web route is configured or discovered, they fail with an actionable message telling you to configure web defaults in `/9router-config`.
+Tools are registered by default. Use `/9router-config` → `Web tools` to hide or re-enable them; when disabled, they are removed from the model's active tool set. If no matching web route is configured or discovered, they fail with an actionable message telling you to configure web defaults in `/9router-config`.
 
 Search supports all generic fields exposed by 9router:
 
@@ -167,7 +167,7 @@ Fetch supports:
 |---------|-------------|
 | `/9router-status` | Show connection status, model count, web route count, and config |
 | `/9router-models` | Browse and select from available 9router models |
-| `/9router-config` | Menu for connection, reasoning, web defaults, and status/routes |
+| `/9router-config` | Menu for connection, reasoning, web defaults, web tools, and status/routes |
 | `/9router-reasoning` | Enable or disable Pi thinking levels for 9router models |
 | `/9router-reload` | Refresh model list and web routes from 9router |
 
